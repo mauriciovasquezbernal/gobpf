@@ -126,7 +126,7 @@ func (b *Module) EnableKprobe(secName string) error {
 	}
 	progFd := probe.fd
 	if isKretprobe {
-		probeType = "r"
+		probeType = "r32"
 		funcName = strings.TrimPrefix(secName, "kretprobe/")
 	} else {
 		probeType = "p"
