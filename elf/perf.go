@@ -24,6 +24,8 @@ import (
 	"sort"
 	"syscall"
 	"unsafe"
+	//"math/rand"
+	//"time"
 )
 
 /*
@@ -145,7 +147,8 @@ func (pm *PerfMap) SetTimestampFunc(timestamp func(*[]byte) uint64) {
 }
 
 func (pm *PerfMap) PollStart() {
-	incoming := OrderedBytesArray{timestamp: pm.timestamp}
+	arr := make([][]byte, 0)
+	incoming := OrderedBytesArray{timestamp: pm.timestamp, bytesArray: &arr}
 
 	m, ok := pm.program.maps[pm.name]
 	if !ok {
@@ -170,7 +173,8 @@ func (pm *PerfMap) PollStart() {
 
 			for {
 				var harvestCount C.int
-				beforeHarvest := nowNanoseconds()
+				beforeHarvest := nowNanoseconds() - 2000952751
+				fmt.Printf("%v -- beforeHarvest\n", beforeHarvest)
 				for cpu := 0; cpu < cpuCount; cpu++ {
 					for {
 						var sample *PerfEventSample
@@ -186,13 +190,16 @@ func (pm *PerfMap) PollStart() {
 						case C.PERF_RECORD_SAMPLE:
 							size := sample.Size - 4
 							b := C.GoBytes(unsafe.Pointer(&sample.data), C.int(size))
-							incoming.bytesArray = append(incoming.bytesArray, b)
+							b2 := make([]byte, C.int(size))
+							copy(b2, b)
+							*incoming.bytesArray = append(*incoming.bytesArray, b2)
 							harvestCount++
 							if pm.timestamp == nil {
 								continue
 							}
-							if incoming.timestamp(&b) > beforeHarvest {
+							if incoming.timestamp(&b2) > beforeHarvest {
 								// see comment below
+								fmt.Printf("%v > %v // break from cpu#%d (count=%d)\n", incoming.timestamp(&b2), beforeHarvest, cpu, harvestCount)
 								break
 							} else {
 								continue
@@ -206,22 +213,54 @@ func (pm *PerfMap) PollStart() {
 				}
 
 				if incoming.timestamp != nil {
+					fmt.Printf("%v ++ sorting %d items\n", beforeHarvest, incoming.Len())
 					sort.Sort(incoming)
+					if incoming.Len() >= 2 {
+						v1 := *(*C.uint64_t)(unsafe.Pointer(&(*incoming.bytesArray)[0][0]))
+						v2 := *(*C.uint64_t)(unsafe.Pointer(&(*incoming.bytesArray)[1][0]))
+						fmt.Printf("%v < %v [less=%v] (just after the SORT), Len=%d\n", v1, v2, v1 < v2, incoming.Len())
+					}
 				}
-				for i := 0; i < incoming.Len(); i++ {
-					if incoming.timestamp != nil && incoming.timestamp(&incoming.bytesArray[0]) > beforeHarvest {
+				for incoming.Len() > 0 {
+					if incoming.timestamp != nil && incoming.timestamp(&(*incoming.bytesArray)[0]) > beforeHarvest {
 						// This record has been sent after the beginning of the harvest. Stop
 						// processing here to keep the order. "incoming" is sorted, so the next
 						// elements also must not be processed now.
+						fmt.Printf("break len=%d\n", incoming.Len())
 						break
 					}
-					pm.receiverChan <- incoming.bytesArray[0]
+					copyOverTheChannel := make([]byte, len((*incoming.bytesArray)[0]))
+					copy(copyOverTheChannel, (*incoming.bytesArray)[0])
+					pm.receiverChan <- copyOverTheChannel
+
+					if incoming.Len() >= 2 {
+						v1 := *(*C.uint64_t)(unsafe.Pointer(&(*incoming.bytesArray)[0][0]))
+						v2 := *(*C.uint64_t)(unsafe.Pointer(&(*incoming.bytesArray)[1][0]))
+						fmt.Printf("%v < %v [less=%v] (after sending over channel) Len=%d\n", v1, v2, v1 < v2, incoming.Len())
+					} else {
+						v1 := *(*C.uint64_t)(unsafe.Pointer(&(*incoming.bytesArray)[0][0]))
+						fmt.Printf("%v < ?? [less=X] (after sending over channel) Len=%d\n", v1, incoming.Len())
+					}
+
 					// remove first element
-					incoming.bytesArray = incoming.bytesArray[1:]
+					*incoming.bytesArray = (*incoming.bytesArray)[1:]
+
+					if incoming.Len() >= 2 {
+						v1 := *(*C.uint64_t)(unsafe.Pointer(&(*incoming.bytesArray)[0][0]))
+						v2 := *(*C.uint64_t)(unsafe.Pointer(&(*incoming.bytesArray)[1][0]))
+						fmt.Printf("%v < %v [less=%v] (after removing first elem) Len=%d\n", v1, v2, v1 < v2, incoming.Len())
+					} else if incoming.Len() >= 1 {
+						v1 := *(*C.uint64_t)(unsafe.Pointer(&(*incoming.bytesArray)[0][0]))
+						fmt.Printf("%v < ??[less=x] (after removing first elem) Len=%d\n", v1, incoming.Len())
+					}
 				}
-				if harvestCount == 0 && len(incoming.bytesArray) == 0 {
+				if harvestCount == 0 && len(*incoming.bytesArray) == 0 {
 					break
 				}
+				//if rand.Intn(10) == 1 {
+				//	fmt.Printf("Sleeping\n")
+				//	time.Sleep(time.Millisecond * 20)
+				//}
 			}
 		}
 	}()
@@ -252,20 +291,20 @@ func perfEventPoll(fds []C.int) error {
 
 // Assume the timestamp is at the beginning of the user struct
 type OrderedBytesArray struct {
-	bytesArray [][]byte
+	bytesArray *[][]byte
 	timestamp  func(*[]byte) uint64
 }
 
 func (a OrderedBytesArray) Len() int {
-	return len(a.bytesArray)
+	return len(*(a.bytesArray))
 }
 
 func (a OrderedBytesArray) Swap(i, j int) {
-	a.bytesArray[i], a.bytesArray[j] = a.bytesArray[j], a.bytesArray[i]
+	(*a.bytesArray)[i], (*a.bytesArray)[j] = (*a.bytesArray)[j], (*a.bytesArray)[i]
 }
 
 func (a OrderedBytesArray) Less(i, j int) bool {
-	return *(*C.uint64_t)(unsafe.Pointer(&a.bytesArray[i][0])) < *(*C.uint64_t)(unsafe.Pointer(&a.bytesArray[j][0]))
+	return *(*C.uint64_t)(unsafe.Pointer(&(*a.bytesArray)[i][0])) < *(*C.uint64_t)(unsafe.Pointer(&(*a.bytesArray)[j][0]))
 }
 
 // Matching 'struct perf_event_header in <linux/perf_event.h>
