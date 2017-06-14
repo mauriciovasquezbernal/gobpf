@@ -22,6 +22,7 @@ install:
   - ipconfig /all
 build_script:
   - ps: Test-NetConnection google.com -Port 80
+  - vagrant status
   - vagrant up
   - vagrant ssh -c "echo 'hello world!'"
 test: off
