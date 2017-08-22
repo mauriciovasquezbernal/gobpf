@@ -33,6 +33,7 @@ import (
 // perf_reader_raw_cb as defined in bcc libbpf.h
 // typedef void (*perf_reader_raw_cb)(void *cb_cookie, void *raw, int raw_size);
 extern void callback_to_go(void*, void*, int);
+extern void callback_to_lost(uint64_t);
 */
 import "C"
 
@@ -128,9 +129,8 @@ func InitPerfMap(table *Table, receiverChan chan []byte) (*PerfMap, error) {
 	}
 
 	for _, cpu := range cpus {
-		cpuC := C.int(cpu)
-		reader, err := C.bpf_open_perf_buffer((C.perf_reader_raw_cb)(unsafe.Pointer(C.callback_to_go)), unsafe.Pointer(uintptr(callbackDataIndex)), -1, cpuC, BPF_PERF_READER_PAGE_CNT)
-		if reader == nil {
+		reader, err := bpfOpenPerfBuffer(cpu, callbackDataIndex)
+		if err != nil {
 			return nil, fmt.Errorf("failed to open perf buffer: %v", err)
 		}
 
@@ -179,4 +179,26 @@ func (pm *PerfMap) poll(timeout int) {
 			C.perf_reader_poll(C.int(len(pm.readers)), &pm.readers[0], C.int(timeout))
 		}
 	}
+}
+
+//export callback_to_lost
+func callback_to_lost(lost C.uint64_t) {
+	callbackData := lookupCallback(uint64(lost))
+	receiverChan := callbackData.receiverChan
+	go func() {
+		receiverChan <- C.GoBytes(unsafe.Pointer(&lost), C.int(unsafe.Sizeof(lost)))
+	}()
+}
+
+func bpfOpenPerfBuffer(cpu uint, callbackDataIndex uint64) (unsafe.Pointer, error) {
+	cpuC := C.int(cpu)
+	reader, err := C.bpf_open_perf_buffer(
+		(C.perf_reader_raw_cb)(unsafe.Pointer(C.callback_to_go)),
+		(C.perf_reader_lost_cb)(unsafe.Pointer(C.callback_to_lost)),
+		unsafe.Pointer(uintptr(callbackDataIndex)),
+		-1, cpuC, BPF_PERF_READER_PAGE_CNT)
+	if reader == nil {
+		return nil, fmt.Errorf("failed to open perf buffer: %v", err)
+	}
+	return reader, nil
 }
