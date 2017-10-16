@@ -430,3 +430,63 @@ func TestModuleLoadELF(t *testing.T) {
 	checkUpdateDeleteElement(t, b)
 	checkLookupElement(t, b)
 }
+
+var bccSched string = `
+#include <uapi/linux/ptrace.h>
+#include <linux/sched.h>
+
+struct key_t {
+  u32 prev_pid;
+  u32 curr_pid;
+};
+
+BPF_HASH(stats, struct key_t, u64, 1024);
+
+int count_sched(struct pt_regs *ctx, struct task_struct *prev) {
+  struct key_t key = {};
+  u64 zero = 0, *val;
+
+  key.curr_pid = bpf_get_current_pid_tgid();
+  key.prev_pid = prev->pid;
+
+  val = stats.lookup_or_init(&key, &zero);
+  (*val)++;
+  return 0;
+}
+`
+
+func TestBccDeleteAll(t *testing.T) {
+	b := bcc.NewModule(bccSched, []string{})
+	if b == nil {
+		t.Fatal("prog is nil")
+	}
+	defer b.Close()
+	fd, err := b.LoadKprobe("count_sched")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.AttachKprobe("finish_task_switch", fd); err != nil {
+		t.Fatal(err)
+	}
+
+	table := bcc.NewTable(b.TableId("stats"), b)
+
+	var key string
+	for v := range table.Iter() {
+		key = v.Key
+		break
+	}
+
+	if _, ok := table.Get(key); ok != true {
+		t.Error("key not found")
+	}
+
+	if err := table.DeleteAll(); err != nil {
+		t.Error(err)
+	}
+
+	if _, ok := table.Get(key); ok == true {
+		t.Error("key has not been deleted")
+	}
+}
