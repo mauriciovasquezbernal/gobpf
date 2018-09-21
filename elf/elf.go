@@ -468,6 +468,7 @@ func (b *Module) relocate(data []byte, rdata []byte) error {
 type SectionParams struct {
 	PerfRingBufferPageCount   int
 	SkipPerfMapInitialization bool
+	CompatProbe               bool   // try to be smart with function names (SyS_ and __x64_sys_)
 	PinPath                   string // path to be pinned, relative to "/sys/fs/bpf"
 }
 
@@ -567,7 +568,11 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 			}
 
 			// If Kprobe or Kretprobe for a syscall, use correct syscall prefix in section name
-			if isKprobe || isKretprobe {
+			compatProbe := false
+			if params, ok := parameters[secName]; ok {
+				compatProbe = params.CompatProbe
+			}
+			if compatProbe && (isKprobe || isKretprobe) {
 				str := strings.Split(secName, "/")
 				if strings.HasPrefix(str[1], "SyS_") {
 					currVersion, err := CurrentKernelVersion()
@@ -686,7 +691,11 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 		}
 
 		// If Kprobe or Kretprobe for a syscall, use correct syscall prefix in section name
-		if isKprobe || isKretprobe {
+		compatProbe := false
+		if params, ok := parameters[secName]; ok {
+			compatProbe = params.CompatProbe
+		}
+		if compatProbe && (isKprobe || isKretprobe) {
 			str := strings.Split(secName, "/")
 			if strings.HasPrefix(str[1], "SyS_") {
 				currKernelVer, err := CurrentKernelVersion()
