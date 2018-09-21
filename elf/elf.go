@@ -567,7 +567,7 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 			}
 
 			// If Kprobe or Kretprobe for a syscall, use correct syscall prefix in section name
-			if isKprobe || isKretprobe {
+			if b.compatProbe && (isKprobe || isKretprobe) {
 				str := strings.Split(secName, "/")
 				if strings.HasPrefix(str[1], "SyS_") {
 					currVersion, err := CurrentKernelVersion()
@@ -686,7 +686,7 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 		}
 
 		// If Kprobe or Kretprobe for a syscall, use correct syscall prefix in section name
-		if isKprobe || isKretprobe {
+		if b.compatProbe && (isKprobe || isKretprobe) {
 			str := strings.Split(secName, "/")
 			if strings.HasPrefix(str[1], "SyS_") {
 				currKernelVer, err := CurrentKernelVersion()
