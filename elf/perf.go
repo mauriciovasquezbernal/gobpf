@@ -20,6 +20,7 @@ package elf
 
 import (
 	"fmt"
+	//"io/ioutil"
 	"os"
 	"sort"
 	"syscall"
@@ -30,6 +31,7 @@ import (
 #include <sys/types.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <linux/perf_event.h>
 #include <poll.h>
@@ -45,6 +47,8 @@ struct event_sample {
 struct read_state {
 	void *buf;
 	int buf_len;
+	uint64_t data_head_initialized;
+	uint64_t data_head;
 };
 
 static int perf_event_read(int page_count, int page_size, void *_state,
@@ -100,6 +104,62 @@ static int perf_event_read(int page_count, int page_size, void *_state,
 
 	return e->header.type;
 }
+
+static int perf_event_dump_backward(int page_count, int page_size, void *_state,
+		    void *_header, void *_sample_ptr)
+{
+	volatile struct perf_event_mmap_page *header = _header;
+	uint64_t data_head = header->data_head;
+	uint64_t raw_size = (uint64_t)page_count * page_size;
+	void *base  = ((uint8_t *)header) + page_size;
+	struct read_state *state = _state;
+	struct perf_event_header *p, *head;
+	void **sample_ptr = (void **) _sample_ptr;
+	void *begin, *end;
+
+	//printf("dump_backward: state=%p\n", state);
+	//printf("dump_backward: init=%llu data_head=%llx\n", state->data_head_initialized, state->data_head);
+	if (state->data_head_initialized == 0) {
+		state->data_head_initialized = 1;
+		state->data_head = data_head;
+	}
+	//printf("dump_backward: done: init=%llu data_head=%llx\n", state->data_head_initialized, state->data_head);
+	begin = p = base + (state->data_head & (raw_size - 1));
+
+	if (p->type != PERF_RECORD_SAMPLE)
+		return 0;
+	//printf("dump_backward: type %d - base %x raw_size=%llx base+raw_size=%llx\n", p->type, base, raw_size, base+raw_size);
+
+	end = base + ((state->data_head + p->size) & (raw_size - 1));
+	//printf("dump_backward: end=%llx other_end=%llx\n", end, base + (state->data_head + p->size) % raw_size);
+
+	//printf("dump_backward: step 1: p->size=%u\n", p->size);
+	if (state->buf_len < p->size || !state->buf) {
+		state->buf = realloc(state->buf, p->size);
+		state->buf_len = p->size;
+	}
+	//printf("dump_backward: step 2: begin=%llx end=%llx\n", begin, end);
+
+	if (end < begin) {
+		//printf("dump_backward: step 3.0\n");
+		uint64_t len = base + raw_size - begin;
+		//printf("dump_backward: step 3.1: %llx %llx %llx %llx\n", len, base, raw_size, begin);
+
+		memcpy(state->buf, begin, len);
+		//printf("dump_backward: step 3.2\n");
+		memcpy((char *) state->buf + len, base, p->size - len);
+		//printf("dump_backward: step 3.3\n");
+	} else {
+		//printf("dump_backward: step 4.0\n");
+		memcpy(state->buf, begin, p->size);
+		//printf("dump_backward: step 4.1\n");
+	}
+
+	*sample_ptr = state->buf;
+	state->data_head += p->size;
+	//printf("dump_backward: step 5\n");
+	return p->type;
+}
 */
 import "C"
 
@@ -137,6 +197,49 @@ func InitPerfMap(b *Module, mapName string, receiverChan chan []byte, lostChan c
 		lostChan:     lostChan,
 		pollStop:     make(chan struct{}),
 	}, nil
+}
+
+func (pm *PerfMap) DumpBackward() (out [][]byte) {
+	incoming := OrderedBytesArray{timestamp: pm.timestamp}
+
+	m, ok := pm.program.maps[pm.name]
+	if !ok {
+		// should not happen or only when pm.program is
+		// suddenly changed
+		panic(fmt.Sprintf("cannot find map %q", pm.name))
+	}
+
+	cpuCount := len(m.pmuFDs)
+	pageSize := os.Getpagesize()
+	//mmapSize := pageSize * (pm.pageCount + 1)
+	for cpu := 0; cpu < cpuCount; cpu++ {
+		//b := C.GoBytes(unsafe.Pointer(m.headers[cpu]), C.int(mmapSize))
+		//ioutil.WriteFile(fmt.Sprintf("/tmp/buffer-%d.data", cpu),
+		//	b, 0644)
+
+		state := C.struct_read_state{}
+	ringBufferLoop:
+		for i := 0; i < 100000; i++ {
+			var sample *PerfEventSample
+			ok := C.perf_event_dump_backward(C.int(pm.pageCount), C.int(pageSize),
+				unsafe.Pointer(&state), unsafe.Pointer(m.headers[cpu]),
+				unsafe.Pointer(&sample))
+			switch ok {
+			case 0:
+				break ringBufferLoop // nothing to read
+			case C.PERF_RECORD_SAMPLE:
+				size := sample.Size - 4
+				b := C.GoBytes(unsafe.Pointer(&sample.data), C.int(size))
+				incoming.bytesArray = append(incoming.bytesArray, b)
+			}
+		}
+	}
+
+	if incoming.timestamp != nil {
+		sort.Sort(incoming)
+	}
+
+	return incoming.bytesArray
 }
 
 // SetTimestampFunc registers a timestamp callback that will be used to
