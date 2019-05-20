@@ -49,6 +49,7 @@ struct read_state {
 	int buf_len;
 	uint64_t data_head_initialized;
 	uint64_t data_head;
+	uint64_t wrapped;
 };
 
 static int perf_event_read(int page_count, int page_size, void *_state,
@@ -116,21 +117,27 @@ static int perf_event_dump_backward(int page_count, int page_size, void *_state,
 	struct perf_event_header *p, *head;
 	void **sample_ptr = (void **) _sample_ptr;
 	void *begin, *end;
+	uint64_t new_head;
 
 	//printf("dump_backward: state=%p\n", state);
 	//printf("dump_backward: init=%llu data_head=%llx\n", state->data_head_initialized, state->data_head);
 	if (state->data_head_initialized == 0) {
 		state->data_head_initialized = 1;
-		state->data_head = data_head;
+		state->data_head = data_head & (raw_size - 1);
+	}
+
+	if ((state->wrapped && state->data_head >= data_head) || state->wrapped > 1) {
+		return 0;
 	}
 	//printf("dump_backward: done: init=%llu data_head=%llx\n", state->data_head_initialized, state->data_head);
-	begin = p = base + (state->data_head & (raw_size - 1));
+	begin = p = base + state->data_head;
 
 	if (p->type != PERF_RECORD_SAMPLE)
 		return 0;
 	//printf("dump_backward: type %d - base %x raw_size=%llx base+raw_size=%llx\n", p->type, base, raw_size, base+raw_size);
 
-	end = base + ((state->data_head + p->size) & (raw_size - 1));
+	new_head = (state->data_head + p->size) & (raw_size - 1);
+	end = base + new_head;
 	//printf("dump_backward: end=%llx other_end=%llx\n", end, base + (state->data_head + p->size) % raw_size);
 
 	//printf("dump_backward: step 1: p->size=%u\n", p->size);
@@ -156,7 +163,10 @@ static int perf_event_dump_backward(int page_count, int page_size, void *_state,
 	}
 
 	*sample_ptr = state->buf;
-	state->data_head += p->size;
+	if (new_head <= state->data_head) {
+		state->wrapped++;
+	}
+	state->data_head = new_head;
 	//printf("dump_backward: step 5\n");
 	return p->type;
 }
@@ -219,7 +229,7 @@ func (pm *PerfMap) DumpBackward() (out [][]byte) {
 
 		state := C.struct_read_state{}
 	ringBufferLoop:
-		for i := 0; i < 100000; i++ {
+		for {
 			var sample *PerfEventSample
 			ok := C.perf_event_dump_backward(C.int(pm.pageCount), C.int(pageSize),
 				unsafe.Pointer(&state), unsafe.Pointer(m.headers[cpu]),
