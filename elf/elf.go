@@ -625,7 +625,8 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 					(*C.char)(lp), C.int(version),
 					(*C.char)(unsafe.Pointer(&b.log[0])), C.int(len(b.log)))
 				if progFd < 0 {
-					return fmt.Errorf("error while loading %q (%v):\n%s", secName, err, b.log)
+					n := bytes.IndexByte(b.log, 0)
+					return fmt.Errorf("error while loading %q (%v):\n%s", secName, err, string(b.log[:n]))
 				}
 
 				switch {
@@ -752,7 +753,8 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 				(*C.char)(lp), C.int(version),
 				(*C.char)(unsafe.Pointer(&b.log[0])), C.int(len(b.log)))
 			if progFd < 0 {
-				return fmt.Errorf("error while loading %q (%v):\n%s", section.Name, err, b.log)
+				n := bytes.IndexByte(b.log, 0)
+				return fmt.Errorf("error while loading %q (%v):\n%s", section.Name, err, string(b.log[:n]))
 			}
 
 			switch {
