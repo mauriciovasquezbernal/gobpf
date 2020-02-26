@@ -33,6 +33,9 @@ import (
 
 	"github.com/iovisor/gobpf/pkg/bpffs"
 	"github.com/iovisor/gobpf/pkg/cpuonline"
+
+	_ "github.com/iovisor/gobpf/elf/include"
+	_ "github.com/iovisor/gobpf/elf/lib"
 )
 
 /*
