@@ -836,7 +836,7 @@ func createPerfRingBuffer(backward bool, overwriteable bool, pageCount int) ([]C
 
 	cpus, err := cpuonline.Get()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to determine online cpus: %v", err)
+		return nil, nil, nil, fmt.Errorf("failed to determine online cpus: %v", err)
 	}
 
 	pmuFds := make([]C.int, len(cpus))
@@ -851,7 +851,7 @@ func createPerfRingBuffer(backward bool, overwriteable bool, pageCount int) ([]C
 		}
 		pmuFD, err := C.perf_event_open_map(-1 /* pid */, cpuC /* cpu */, -1 /* group_fd */, C.PERF_FLAG_FD_CLOEXEC, backwardC)
 		if pmuFD < 0 {
-			return nil, nil, fmt.Errorf("perf_event_open for map error: %v", err)
+			return nil, nil, nil, fmt.Errorf("perf_event_open for map error: %v", err)
 		}
 
 		// mmap
@@ -869,13 +869,13 @@ func createPerfRingBuffer(backward bool, overwriteable bool, pageCount int) ([]C
 
 		base, err := syscall.Mmap(int(pmuFD), 0, mmapSize, prot, syscall.MAP_SHARED)
 		if err != nil {
-			return nil, nil, fmt.Errorf("mmap error: %v", err)
+			return nil, nil, nil, fmt.Errorf("mmap error: %v", err)
 		}
 
 		// enable
 		_, _, err2 := syscall.Syscall(syscall.SYS_IOCTL, uintptr(pmuFD), C.PERF_EVENT_IOC_ENABLE, 0)
 		if err2 != 0 {
-			return nil, nil, fmt.Errorf("error enabling perf event: %v", err2)
+			return nil, nil, nil, fmt.Errorf("error enabling perf event: %v", err2)
 		}
 
 		pmuFds[i] = pmuFD
