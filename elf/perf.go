@@ -212,7 +212,7 @@ func (pm *PerfMap) SwapAndDumpBackward() (out [][]byte) {
 	}
 
 	// step 1: create a new perf ring buffer
-	pmuFds, headers, err := createPerfRingBuffer(true, true, pm.pageCount)
+	pmuFds, headers, bases, err := createPerfRingBuffer(true, true, pm.pageCount)
 	if err != nil {
 		return
 	}
@@ -236,7 +236,22 @@ func (pm *PerfMap) SwapAndDumpBackward() (out [][]byte) {
 	out = pm.DumpBackward()
 
 	// step4: close old buffer
+	// unmap
+	for _, base := range m.bases {
+		err := syscall.Munmap(base)
+		if err != nil {
+			return fmt.Errorf("unmap error: %v", err)
+		}
+	}
+
 	for _, fd := range m.pmuFDs {
+		// disable
+		_, _, err2 := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), C.PERF_EVENT_IOC_DISABLE, 0)
+		if err2 != 0 {
+			return
+		}
+
+		// close
 		if err := syscall.Close(int(fd)); err != nil {
 			return
 		}
@@ -245,6 +260,7 @@ func (pm *PerfMap) SwapAndDumpBackward() (out [][]byte) {
 	// update file descriptors to new perf ring buffer
 	m.pmuFDs = pmuFds
 	m.headers = headers
+	m.bases = bases
 
 	return
 }
