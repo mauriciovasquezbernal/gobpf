@@ -240,7 +240,7 @@ func (pm *PerfMap) SwapAndDumpBackward() (out [][]byte) {
 	for _, base := range m.bases {
 		err := syscall.Munmap(base)
 		if err != nil {
-			return fmt.Errorf("unmap error: %v", err)
+			return
 		}
 	}
 
